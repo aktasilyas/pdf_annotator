@@ -1,12 +1,10 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 import 'package:pdf_annotator/features/documents/domain/entities/document.dart';
 import 'package:pdf_annotator/features/documents/presentation/providers/documents_provider.dart';
 import 'package:pdf_annotator/features/viewer/presentation/screens/viewer_screen.dart';
-import 'package:pdf_annotator/core/utils/file_utils.dart';
 
+// Ana ekran: belge listesini gösterir, ekleme ve silme akışlarını tetikler.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -60,45 +58,25 @@ class HomeScreen extends ConsumerWidget {
   }
 
   Future<void> _importPdf(BuildContext context, WidgetRef ref) async {
-    try {
-      // PDF seç
-      final file = await FileUtils.pickPdfFile();
-      if (file == null) return;
-
-      // Loading göster
-      if (context.mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => const Center(child: CircularProgressIndicator()),
-        );
-      }
-
-      // Dosyayı uygulama dizinine kopyala
-      final copiedFile = await FileUtils.copyToAppDirectory(file);
-      final fileSize = await FileUtils.getFileSize(copiedFile);
-      final fileName = FileUtils.getFileName(file.path);
-
-      // Document oluştur
-      final now = DateTime.now();
-      final document = Document(
-        id: const Uuid().v4(),
-        title: fileName,
-        filePath: copiedFile.path,
-        fileSize: fileSize,
-        createdAt: now,
-        updatedAt: now,
+    // PDF import akışını başlatır ve başarılıysa snackbar gösterir.
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
       );
+    }
 
-      // Kaydet
-      await ref.read(documentsProvider.notifier).addDocument(document);
-
-      // Dialog kapat
+    try {
+      final newDocument =
+          await ref.read(documentsProvider.notifier).importDocument();
       if (context.mounted) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$fileName eklendi')));
+        if (newDocument != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${newDocument.title} eklendi')),
+          );
+        }
       }
     } catch (e) {
       if (context.mounted) {
@@ -213,6 +191,7 @@ class _DocumentCard extends ConsumerWidget {
   }
 
   void _openDocument(BuildContext context) {
+    // Seçilen belgeyi görüntüleyici ekrana açar.
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => ViewerScreen(document: document)),
@@ -220,6 +199,7 @@ class _DocumentCard extends ConsumerWidget {
   }
 
   void _showOptions(BuildContext context, WidgetRef ref) {
+    // Kart üzerinde uzun basınca seçenek menüsünü gösterir.
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
@@ -241,6 +221,7 @@ class _DocumentCard extends ConsumerWidget {
   }
 
   void _confirmDelete(BuildContext context, WidgetRef ref) {
+    // Silme onay diyaloğunu gösterir ve onaylandığında siler.
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -254,8 +235,9 @@ class _DocumentCard extends ConsumerWidget {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
-              await FileUtils.deleteFile(document.filePath);
-              ref.read(documentsProvider.notifier).deleteDocument(document.id);
+              await ref
+                  .read(documentsProvider.notifier)
+                  .deleteDocument(document);
             },
             child: const Text('Sil', style: TextStyle(color: Colors.red)),
           ),
@@ -265,6 +247,7 @@ class _DocumentCard extends ConsumerWidget {
   }
 
   String _formatDate(DateTime date) {
+    // Gün/hafta bazlı okunabilir tarih metni üretir.
     final now = DateTime.now();
     final diff = now.difference(date);
 
