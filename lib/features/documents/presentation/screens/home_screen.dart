@@ -1,0 +1,281 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
+import 'package:pdf_annotator/features/documents/domain/entities/document.dart';
+import 'package:pdf_annotator/features/documents/presentation/providers/documents_provider.dart';
+import 'package:pdf_annotator/features/viewer/presentation/screens/viewer_screen.dart';
+import 'package:pdf_annotator/core/utils/file_utils.dart';
+
+class HomeScreen extends ConsumerWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final documentsAsync = ref.watch(documentsProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('PDF Annotator'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              // TODO: Settings screen
+            },
+          ),
+        ],
+      ),
+      body: documentsAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, stack) => Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error, size: 64, color: Colors.red),
+              const SizedBox(height: 16),
+              Text('Hata: $error'),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () =>
+                    ref.read(documentsProvider.notifier).loadDocuments(),
+                child: const Text('Tekrar Dene'),
+              ),
+            ],
+          ),
+        ),
+        data: (documents) {
+          if (documents.isEmpty) {
+            return const _EmptyState();
+          }
+          return _DocumentGrid(documents: documents);
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _importPdf(context, ref),
+        icon: const Icon(Icons.add),
+        label: const Text('PDF Ekle'),
+      ),
+    );
+  }
+
+  Future<void> _importPdf(BuildContext context, WidgetRef ref) async {
+    try {
+      // PDF seç
+      final file = await FileUtils.pickPdfFile();
+      if (file == null) return;
+
+      // Loading göster
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const Center(child: CircularProgressIndicator()),
+        );
+      }
+
+      // Dosyayı uygulama dizinine kopyala
+      final copiedFile = await FileUtils.copyToAppDirectory(file);
+      final fileSize = await FileUtils.getFileSize(copiedFile);
+      final fileName = FileUtils.getFileName(file.path);
+
+      // Document oluştur
+      final now = DateTime.now();
+      final document = Document(
+        id: const Uuid().v4(),
+        title: fileName,
+        filePath: copiedFile.path,
+        fileSize: fileSize,
+        createdAt: now,
+        updatedAt: now,
+      );
+
+      // Kaydet
+      await ref.read(documentsProvider.notifier).addDocument(document);
+
+      // Dialog kapat
+      if (context.mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$fileName eklendi')));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      }
+    }
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.picture_as_pdf, size: 80, color: Colors.grey),
+          SizedBox(height: 16),
+          Text(
+            'Henüz PDF yok',
+            style: TextStyle(fontSize: 18, color: Colors.grey),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'PDF eklemek için + butonuna tıkla',
+            style: TextStyle(fontSize: 14, color: Colors.grey),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DocumentGrid extends StatelessWidget {
+  final List<Document> documents;
+
+  const _DocumentGrid({required this.documents});
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        childAspectRatio: 0.75,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+      ),
+      itemCount: documents.length,
+      itemBuilder: (context, index) {
+        return _DocumentCard(document: documents[index]);
+      },
+    );
+  }
+}
+
+class _DocumentCard extends ConsumerWidget {
+  final Document document;
+
+  const _DocumentCard({required this.document});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _openDocument(context),
+        onLongPress: () => _showOptions(context, ref),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Thumbnail placeholder
+            Expanded(
+              child: Container(
+                color: Colors.grey[200],
+                child: const Icon(
+                  Icons.picture_as_pdf,
+                  size: 64,
+                  color: Colors.red,
+                ),
+              ),
+            ),
+            // Title
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    document.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatDate(document.updatedAt),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openDocument(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ViewerScreen(document: document)),
+    );
+  }
+
+  void _showOptions(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.red),
+              title: const Text('Sil'),
+              onTap: () {
+                Navigator.pop(context);
+                _confirmDelete(context, ref);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _confirmDelete(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('PDF Sil'),
+        content: Text('${document.title} silinecek. Emin misin?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('İptal'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await FileUtils.deleteFile(document.filePath);
+              ref.read(documentsProvider.notifier).deleteDocument(document.id);
+            },
+            child: const Text('Sil', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+
+    if (diff.inDays == 0) {
+      return 'Bugün';
+    } else if (diff.inDays == 1) {
+      return 'Dün';
+    } else if (diff.inDays < 7) {
+      return '${diff.inDays} gün önce';
+    } else {
+      return '${date.day}.${date.month}.${date.year}';
+    }
+  }
+}

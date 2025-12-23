@@ -1,0 +1,48 @@
+name: pdf_annotator
+description: "Flexcil benzeri PDF okuyucu ve not alma uygulaması"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State Management
+  flutter_riverpod: ^2.4.9
+  riverpod_annotation: ^2.3.3
+
+  # PDF
+  syncfusion_flutter_pdfviewer: ^27.1.58
+
+  # Database
+  sqflite: ^2.3.0
+  
+  # File Management
+  file_picker: ^8.0.0+1
+  path_provider: ^2.1.3
+  path: ^1.9.0
+
+  # Utils
+  uuid: ^4.4.0
+  equatable: ^2.0.5
+  collection: ^1.18.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # Code Generation
+  riverpod_generator: ^2.4.0
+  build_runner: ^2.4.9
+
+  # Testing
+  mocktail: ^1.0.3
+
+  # Linting
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
