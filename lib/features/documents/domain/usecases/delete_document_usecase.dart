@@ -1,17 +1,24 @@
-import 'package:pdf_annotator/features/documents/domain/entities/document.dart';
-import 'package:pdf_annotator/features/documents/domain/repositories/document_repository.dart';
-import 'package:pdf_annotator/features/documents/domain/services/file_storage_repository.dart';
+/// Delete Document UseCase
+///
+/// Doküman silme işlemini yönetir.
+library;
 
-// Use case: hem dosyayı hem veritabanı kaydını siler.
+import 'package:pdf_annotator/core/utils/result.dart';
+import 'package:pdf_annotator/features/documents/domain/repositories/document_repository.dart';
+
 class DeleteDocumentUseCase {
   final DocumentRepository _repository;
-  final FileStorageRepository _fileStorage;
 
-  const DeleteDocumentUseCase(this._repository, this._fileStorage);
+  const DeleteDocumentUseCase(this._repository);
 
-  /// Deletes the physical file and its DB record.
-  Future<void> call(Document document) async {
-    await _fileStorage.deleteFile(document.filePath);
-    await _repository.deleteDocument(document.id);
+  /// Dokümanı siler
+  ///
+  /// [id]: Silinecek doküman ID'si
+  ///
+  /// Returns: Result<void>
+  /// - Success: İşlem başarılı
+  /// - Error: Hata bilgisi
+  Future<Result<void>> call(String id) {
+    return _repository.deleteDocument(id);
   }
 }

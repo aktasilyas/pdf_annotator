@@ -1,54 +1,68 @@
+/// Home Screen
+///
+/// Ana ekran - doküman listesi.
+/// PDF import, listeleme ve silme işlemleri.
+/// Error handling ve loading state destekler.
+library;
+
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
+import 'package:pdf_annotator/core/utils/file_utils.dart';
+import 'package:pdf_annotator/core/utils/logger.dart';
 import 'package:pdf_annotator/features/documents/domain/entities/document.dart';
 import 'package:pdf_annotator/features/documents/presentation/providers/documents_provider.dart';
 import 'package:pdf_annotator/features/viewer/presentation/screens/viewer_screen.dart';
 
-// Ana ekran: belge listesini gösterir, ekleme ve silme akışlarını tetikler.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final documentsAsync = ref.watch(documentsProvider);
+    final state = ref.watch(documentsProvider);
+
+    // Error snackbar göster
+    ref.listen<DocumentsState>(documentsProvider, (previous, next) {
+      if (next.errorMessage != null &&
+          previous?.errorMessage != next.errorMessage) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(next.errorMessage!),
+            backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Kapat',
+              textColor: Colors.white,
+              onPressed: () {
+                ref.read(documentsProvider.notifier).clearError();
+              },
+            ),
+          ),
+        );
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('PDF Annotator'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Yenile',
+            onPressed: () {
+              ref.read(documentsProvider.notifier).loadDocuments();
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.settings),
+            tooltip: 'Ayarlar',
             onPressed: () {
               // TODO: Settings screen
             },
           ),
         ],
       ),
-      body: documentsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, stack) => Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error, size: 64, color: Colors.red),
-              const SizedBox(height: 16),
-              Text('Hata: $error'),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () =>
-                    ref.read(documentsProvider.notifier).loadDocuments(),
-                child: const Text('Tekrar Dene'),
-              ),
-            ],
-          ),
-        ),
-        data: (documents) {
-          if (documents.isEmpty) {
-            return const _EmptyState();
-          }
-          return _DocumentGrid(documents: documents);
-        },
-      ),
+      body: _buildBody(context, ref, state),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _importPdf(context, ref),
         icon: const Icon(Icons.add),
@@ -57,38 +71,99 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _importPdf(BuildContext context, WidgetRef ref) async {
-    // PDF import akışını başlatır ve başarılıysa snackbar gösterir.
-    if (context.mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator()),
-      );
+  /// Body widget - state'e göre farklı içerik gösterir
+  Widget _buildBody(BuildContext context, WidgetRef ref, DocumentsState state) {
+    if (state.isLoading && state.documents.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
     }
 
+    if (state.documents.isEmpty) {
+      return const _EmptyState();
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => ref.read(documentsProvider.notifier).loadDocuments(),
+      child: _DocumentGrid(documents: state.documents),
+    );
+  }
+
+  /// PDF import işlemi
+  Future<void> _importPdf(BuildContext context, WidgetRef ref) async {
     try {
-      final newDocument =
-          await ref.read(documentsProvider.notifier).importDocument();
+      logger.debug('Starting PDF import');
+
+      // PDF seç
+      final file = await FileUtils.pickPdfFile();
+      if (file == null) {
+        logger.debug('PDF selection cancelled');
+        return;
+      }
+
+      // Loading göster
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const Center(child: CircularProgressIndicator()),
+        );
+      }
+
+      // Dosyayı uygulama dizinine kopyala
+      final copiedFile = await FileUtils.copyToAppDirectory(file);
+      final fileSize = await FileUtils.getFileSize(copiedFile);
+      final fileName = FileUtils.getFileName(file.path);
+
+      logger.info(
+        'PDF file copied',
+        details: {'fileName': fileName, 'fileSize': fileSize},
+      );
+
+      // Document oluştur
+      final now = DateTime.now();
+      final document = Document(
+        id: const Uuid().v4(),
+        title: fileName,
+        filePath: copiedFile.path,
+        fileSize: fileSize,
+        createdAt: now,
+        updatedAt: now,
+      );
+
+      // Kaydet
+      final success = await ref
+          .read(documentsProvider.notifier)
+          .addDocument(document);
+
+      // Dialog kapat
       if (context.mounted) {
         Navigator.of(context).pop();
-        if (newDocument != null) {
+
+        if (success) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${newDocument.title} eklendi')),
+            SnackBar(
+              content: Text('$fileName eklendi'),
+              backgroundColor: Colors.green,
+            ),
           );
         }
       }
-    } catch (e) {
+    } catch (e, st) {
+      logger.error('PDF import failed', error: e, stackTrace: st);
+
       if (context.mounted) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Hata: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('PDF eklenemedi: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
 }
 
+/// Empty state widget
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
 
@@ -115,6 +190,7 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
+/// Document grid widget
 class _DocumentGrid extends StatelessWidget {
   final List<Document> documents;
 
@@ -138,6 +214,7 @@ class _DocumentGrid extends StatelessWidget {
   }
 }
 
+/// Document card widget
 class _DocumentCard extends ConsumerWidget {
   final Document document;
 
@@ -164,7 +241,7 @@ class _DocumentCard extends ConsumerWidget {
                 ),
               ),
             ),
-            // Title
+            // Title and info
             Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -190,16 +267,17 @@ class _DocumentCard extends ConsumerWidget {
     );
   }
 
+  /// Dokümanı aç
   void _openDocument(BuildContext context) {
-    // Seçilen belgeyi görüntüleyici ekrana açar.
+    logger.debug('Opening document: ${document.title}');
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => ViewerScreen(document: document)),
     );
   }
 
+  /// Seçenekleri göster
   void _showOptions(BuildContext context, WidgetRef ref) {
-    // Kart üzerinde uzun basınca seçenek menüsünü gösterir.
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
@@ -220,8 +298,8 @@ class _DocumentCard extends ConsumerWidget {
     );
   }
 
+  /// Silme onayı
   void _confirmDelete(BuildContext context, WidgetRef ref) {
-    // Silme onay diyaloğunu gösterir ve onaylandığında siler.
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -235,9 +313,16 @@ class _DocumentCard extends ConsumerWidget {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
+
+              logger.debug('Deleting document: ${document.id}');
+
+              // Dosyayı sil
+              await FileUtils.deleteFile(document.filePath);
+
+              // DB'den sil
               await ref
                   .read(documentsProvider.notifier)
-                  .deleteDocument(document);
+                  .deleteDocument(document.id);
             },
             child: const Text('Sil', style: TextStyle(color: Colors.red)),
           ),
@@ -246,8 +331,8 @@ class _DocumentCard extends ConsumerWidget {
     );
   }
 
+  /// Tarih formatla
   String _formatDate(DateTime date) {
-    // Gün/hafta bazlı okunabilir tarih metni üretir.
     final now = DateTime.now();
     final diff = now.difference(date);
 
