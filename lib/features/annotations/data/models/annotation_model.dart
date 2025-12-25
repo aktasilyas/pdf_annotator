@@ -8,7 +8,6 @@ library;
 import 'dart:convert';
 import 'package:pdf_annotator/features/annotations/data/models/point_model.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/annotation_type.dart';
-import 'package:pdf_annotator/features/annotations/domain/entities/point.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/stroke.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/highlight.dart';
 
