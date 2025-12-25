@@ -1,7 +1,7 @@
 /// Bitmap Cache Manager
 ///
 /// Tamamlanmış çizimleri ui.Image olarak cache'ler.
-/// Her frame'de tüm stroke'ları çizmek yerine bitmap gösterir.
+/// Memory-safe implementasyon.
 library;
 
 import 'dart:ui' as ui;
@@ -19,6 +19,11 @@ class BitmapCacheManager {
       return null;
     }
 
+    final width = page.pageSize.width.ceil();
+    final height = page.pageSize.height.ceil();
+
+    if (width <= 0 || height <= 0) return null;
+
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
@@ -34,14 +39,12 @@ class BitmapCacheManager {
 
     final picture = recorder.endRecording();
 
-    final image = await picture.toImage(
-      page.pageSize.width.ceil(),
-      page.pageSize.height.ceil(),
-    );
-
-    picture.dispose();
-
-    return image;
+    try {
+      final image = await picture.toImage(width, height);
+      return image;
+    } finally {
+      picture.dispose();
+    }
   }
 
   /// Mevcut cache'e yeni stroke ekle
@@ -50,6 +53,11 @@ class BitmapCacheManager {
     ui.Image? existingCache,
     Stroke newStroke,
   ) async {
+    final width = page.pageSize.width.ceil();
+    final height = page.pageSize.height.ceil();
+
+    if (width <= 0 || height <= 0) return null;
+
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
@@ -63,14 +71,12 @@ class BitmapCacheManager {
 
     final picture = recorder.endRecording();
 
-    final image = await picture.toImage(
-      page.pageSize.width.ceil(),
-      page.pageSize.height.ceil(),
-    );
-
-    picture.dispose();
-
-    return image;
+    try {
+      final image = await picture.toImage(width, height);
+      return image;
+    } finally {
+      picture.dispose();
+    }
   }
 
   /// Mevcut cache'e yeni highlight ekle
@@ -79,8 +85,30 @@ class BitmapCacheManager {
     ui.Image? existingCache,
     Highlight newHighlight,
   ) async {
-    // Highlight için full rebuild gerekli (blend mode nedeniyle)
-    return rebuildCache(page);
+    final width = page.pageSize.width.ceil();
+    final height = page.pageSize.height.ceil();
+
+    if (width <= 0 || height <= 0) return null;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // Mevcut cache'i çiz
+    if (existingCache != null) {
+      canvas.drawImage(existingCache, Offset.zero, Paint());
+    }
+
+    // Yeni highlight'ı çiz
+    _drawHighlight(canvas, newHighlight);
+
+    final picture = recorder.endRecording();
+
+    try {
+      final image = await picture.toImage(width, height);
+      return image;
+    } finally {
+      picture.dispose();
+    }
   }
 
   void _drawStroke(Canvas canvas, Stroke stroke) {

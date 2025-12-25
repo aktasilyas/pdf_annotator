@@ -4,6 +4,7 @@
 /// Listenable pattern ile efficient repaint.
 library;
 
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/stroke.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/highlight.dart';
@@ -16,15 +17,16 @@ class StrokePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 1. Cached bitmap (tamamlanmış çizimler)
+    // 1. Cached bitmap varsa kullan
     if (page.cachedBitmap != null) {
       canvas.drawImage(
         page.cachedBitmap!,
         Offset.zero,
         Paint()..filterQuality = FilterQuality.low,
       );
-    } else if (page.needsCacheRebuild) {
-      // Cache yoksa strokes'ları direkt çiz (ilk yükleme)
+    } else {
+      // Cache yoksa tüm çizimleri direkt çiz
+      // (ilk yükleme veya cache rebuild sırasında)
       for (final highlight in page.highlights) {
         _drawHighlight(canvas, highlight);
       }
@@ -34,18 +36,21 @@ class StrokePainter extends CustomPainter {
     }
 
     // 2. Aktif highlight (çiziliyor)
-    if (page.activeHighlight != null &&
-        page.activeHighlight!.points.isNotEmpty) {
-      _drawHighlight(canvas, page.activeHighlight!);
+    final activeHighlight = page.activeHighlight;
+    if (activeHighlight != null && activeHighlight.points.isNotEmpty) {
+      _drawHighlight(canvas, activeHighlight);
     }
 
     // 3. Aktif stroke (çiziliyor)
-    if (page.activeStroke != null && page.activeStroke!.points.isNotEmpty) {
-      _drawStroke(canvas, page.activeStroke!);
+    final activeStroke = page.activeStroke;
+    if (activeStroke != null && activeStroke.points.isNotEmpty) {
+      _drawStroke(canvas, activeStroke);
     }
   }
 
   void _drawStroke(Canvas canvas, Stroke stroke) {
+    if (stroke.points.isEmpty) return;
+
     final paint = Paint()
       ..color = Color(stroke.color).withOpacity(stroke.opacity)
       ..strokeWidth = stroke.strokeWidth
@@ -59,6 +64,8 @@ class StrokePainter extends CustomPainter {
   }
 
   void _drawHighlight(Canvas canvas, Highlight highlight) {
+    if (highlight.points.isEmpty) return;
+
     final paint = Paint()
       ..color = Color(highlight.color).withOpacity(highlight.opacity)
       ..strokeWidth = highlight.strokeWidth
@@ -107,7 +114,6 @@ class StrokePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant StrokePainter oldDelegate) {
-    // Sayfa değiştiyse repaint
     return oldDelegate.page != page;
   }
 }

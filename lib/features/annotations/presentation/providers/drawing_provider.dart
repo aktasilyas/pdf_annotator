@@ -4,6 +4,7 @@
 /// Her sayfa için DrawingPage instance'ı tutar.
 library;
 
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -36,7 +37,6 @@ final annotationRepositoryProvider = Provider<AnnotationRepository>((ref) {
   return AnnotationRepositoryImpl(datasource);
 });
 
-/// Drawing Controller Provider
 final drawingControllerProvider = ChangeNotifierProvider<DrawingController>((
   ref,
 ) {
@@ -51,15 +51,12 @@ final drawingControllerProvider = ChangeNotifierProvider<DrawingController>((
 class DrawingController extends ChangeNotifier {
   final AnnotationRepository _repository;
 
-  /// Sayfa cache'i
   final Map<String, DrawingPage> _pages = {};
 
-  /// Mevcut sayfa
   String? _currentPageKey;
   DrawingPage? get currentPage =>
       _currentPageKey != null ? _pages[_currentPageKey] : null;
 
-  /// Araç ayarları
   DrawingTool _selectedTool = DrawingTool.none;
   DrawingTool get selectedTool => _selectedTool;
 
@@ -72,14 +69,15 @@ class DrawingController extends ChangeNotifier {
   double _highlightWidth = 20.0;
   double get highlightWidth => _highlightWidth;
 
-  /// İşlemciler
   final _uuid = const Uuid();
   final _pointThinner = const PointThinner();
   final _strokeSmoother = const StrokeSmoother();
   final _cacheManager = const BitmapCacheManager();
 
-  /// Son nokta (thinning için)
   Point? _lastPoint;
+
+  /// İşlem devam ediyor mu? (çakışmayı önle)
+  bool _isProcessing = false;
 
   DrawingController(this._repository);
 
@@ -87,7 +85,6 @@ class DrawingController extends ChangeNotifier {
   // Page Management
   // ===========================================================================
 
-  /// Sayfa al veya oluştur
   DrawingPage getOrCreatePage(String documentId, int pageNumber, Size size) {
     final key = '${documentId}_$pageNumber';
 
@@ -106,16 +103,13 @@ class DrawingController extends ChangeNotifier {
     return _pages[key]!;
   }
 
-  /// Mevcut sayfayı ayarla
   void setCurrentPage(String documentId, int pageNumber, Size size) {
     final key = '${documentId}_$pageNumber';
 
-    // Aynı sayfa zaten aktifse bir şey yapma
     if (_currentPageKey == key) {
       return;
     }
 
-    // Önceki sayfanın çizimini iptal et
     currentPage?.cancelDrawing();
 
     _currentPageKey = key;
@@ -123,16 +117,14 @@ class DrawingController extends ChangeNotifier {
 
     final page = getOrCreatePage(documentId, pageNumber, size);
 
-    // Cache rebuild gerekiyorsa yap
     if (page.needsCacheRebuild &&
         (page.strokes.isNotEmpty || page.highlights.isNotEmpty)) {
-      _rebuildCache(page);
+      _rebuildCacheAsync(page);
     }
 
     notifyListeners();
   }
 
-  /// Sayfanın annotation'larını yükle
   Future<void> _loadPageAnnotations(
     String documentId,
     int pageNumber,
@@ -151,11 +143,11 @@ class DrawingController extends ChangeNotifier {
       page.loadAnnotations(strokes, highlights);
 
       if (strokes.isNotEmpty || highlights.isNotEmpty) {
-        await _rebuildCache(page);
+        await _rebuildCacheAsync(page);
       }
 
       logger.debug(
-        'Loaded annotations for page $pageNumber: ${strokes.length} strokes, ${highlights.length} highlights',
+        'Loaded ${strokes.length} strokes, ${highlights.length} highlights for page $pageNumber',
       );
     } catch (e, st) {
       logger.error('Failed to load annotations', error: e, stackTrace: st);
@@ -198,7 +190,6 @@ class DrawingController extends ChangeNotifier {
   // Drawing Operations
   // ===========================================================================
 
-  /// Çizime başla
   void startDrawing(Offset position) {
     final page = currentPage;
     if (page == null || !_selectedTool.isDrawingTool) return;
@@ -246,7 +237,6 @@ class DrawingController extends ChangeNotifier {
     }
   }
 
-  /// Çizimi güncelle
   void updateDrawing(Offset position) {
     final page = currentPage;
     if (page == null) return;
@@ -258,7 +248,6 @@ class DrawingController extends ChangeNotifier {
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
-    // Point thinning
     if (!_pointThinner.shouldAddPoint(_lastPoint, point)) {
       return;
     }
@@ -272,60 +261,73 @@ class DrawingController extends ChangeNotifier {
     }
   }
 
-  /// Çizimi bitir
-  /// Çizimi bitir
   Future<void> endDrawing() async {
     final page = currentPage;
     if (page == null) return;
 
+    // Çakışmayı önle
+    if (_isProcessing) return;
+    _isProcessing = true;
+
     _lastPoint = null;
 
-    if (page.activeStroke != null) {
-      final activeStroke = page.activeStroke!;
+    try {
+      if (page.activeStroke != null) {
+        final activeStroke = page.activeStroke!;
 
-      // Minimum 2 nokta kontrolü
-      if (activeStroke.points.length < 2) {
-        page.cancelDrawing();
-        return;
+        if (activeStroke.points.length < 2) {
+          page.cancelDrawing();
+          return;
+        }
+
+        final smoothed = _strokeSmoother.smoothStroke(activeStroke);
+
+        // Önce stroke'u bitir (listeye ekle, active'i null yap)
+        page.finishStroke(smoothed);
+
+        // Sonra cache güncelle
+        final oldCache = page.cachedBitmap;
+        final newCache = await _cacheManager.appendStroke(
+          page,
+          oldCache,
+          smoothed,
+        );
+        page.updateCache(newCache);
+
+        // DB'ye kaydet (arka planda)
+        _saveStroke(smoothed);
       }
 
-      // Smooth uygula
-      final smoothed = _strokeSmoother.smoothStroke(activeStroke);
+      if (page.activeHighlight != null) {
+        final activeHighlight = page.activeHighlight!;
 
-      // Önce cache güncelle (async)
-      final newCache = await _cacheManager.appendStroke(
-        page,
-        page.cachedBitmap,
-        smoothed,
-      );
+        if (activeHighlight.points.length < 2) {
+          page.cancelDrawing();
+          return;
+        }
 
-      // Sonra stroke'u bitir ve cache'i ata
-      page.finishStroke(smoothed);
-      page.updateCache(newCache);
+        final smoothed = _strokeSmoother.smoothHighlight(activeHighlight);
 
-      // DB'ye kaydet
-      await _saveStroke(smoothed);
-    }
+        // Önce highlight'ı bitir
+        page.finishHighlight(smoothed);
 
-    if (page.activeHighlight != null) {
-      final activeHighlight = page.activeHighlight!;
+        // Sonra cache güncelle (highlight için append kullan)
+        final oldCache = page.cachedBitmap;
+        final newCache = await _cacheManager.appendHighlight(
+          page,
+          oldCache,
+          smoothed,
+        );
+        page.updateCache(newCache);
 
-      if (activeHighlight.points.length < 2) {
-        page.cancelDrawing();
-        return;
+        // DB'ye kaydet
+        _saveHighlight(smoothed);
       }
-
-      final smoothed = _strokeSmoother.smoothHighlight(activeHighlight);
-
-      // Highlight için full rebuild gerekli
-      page.finishHighlight(smoothed);
-      await _rebuildCache(page);
-
-      await _saveHighlight(smoothed);
+    } finally {
+      _isProcessing = false;
     }
   }
 
-  /// Çizimi iptal et
   void cancelDrawing() {
     currentPage?.cancelDrawing();
     _lastPoint = null;
@@ -335,28 +337,32 @@ class DrawingController extends ChangeNotifier {
   // Eraser
   // ===========================================================================
 
-  /// Silgi ile sil
   Future<void> eraseAt(Offset position, double tolerance) async {
     final page = currentPage;
     if (page == null || _selectedTool != DrawingTool.eraser) return;
 
-    // Stroke ara
-    final stroke = page.findStrokeAt(position, tolerance);
-    if (stroke != null) {
-      page.removeStroke(stroke.id);
-      await _rebuildCache(page);
-      await _repository.deleteAnnotation(stroke.id);
-      logger.debug('Erased stroke: ${stroke.id}');
-      return;
-    }
+    if (_isProcessing) return;
+    _isProcessing = true;
 
-    // Highlight ara
-    final highlight = page.findHighlightAt(position, tolerance);
-    if (highlight != null) {
-      page.removeHighlight(highlight.id);
-      await _rebuildCache(page);
-      await _repository.deleteAnnotation(highlight.id);
-      logger.debug('Erased highlight: ${highlight.id}');
+    try {
+      final stroke = page.findStrokeAt(position, tolerance);
+      if (stroke != null) {
+        page.removeStroke(stroke.id);
+        await _rebuildCacheAsync(page);
+        _repository.deleteAnnotation(stroke.id);
+        logger.debug('Erased stroke: ${stroke.id}');
+        return;
+      }
+
+      final highlight = page.findHighlightAt(position, tolerance);
+      if (highlight != null) {
+        page.removeHighlight(highlight.id);
+        await _rebuildCacheAsync(page);
+        _repository.deleteAnnotation(highlight.id);
+        logger.debug('Erased highlight: ${highlight.id}');
+      }
+    } finally {
+      _isProcessing = false;
     }
   }
 
@@ -371,19 +377,32 @@ class DrawingController extends ChangeNotifier {
     final page = currentPage;
     if (page == null || !page.canUndo) return;
 
-    page.undo();
-    await _rebuildCache(page);
-    // Not: DB sync için daha kompleks mantık gerekir
-    logger.debug('Undo performed');
+    if (_isProcessing) return;
+    _isProcessing = true;
+
+    try {
+      page.undo();
+      await _rebuildCacheAsync(page);
+      logger.debug('Undo performed');
+    } finally {
+      _isProcessing = false;
+    }
   }
 
   Future<void> redo() async {
     final page = currentPage;
     if (page == null || !page.canRedo) return;
 
-    page.redo();
-    await _rebuildCache(page);
-    logger.debug('Redo performed');
+    if (_isProcessing) return;
+    _isProcessing = true;
+
+    try {
+      page.redo();
+      await _rebuildCacheAsync(page);
+      logger.debug('Redo performed');
+    } finally {
+      _isProcessing = false;
+    }
   }
 
   // ===========================================================================
@@ -394,21 +413,32 @@ class DrawingController extends ChangeNotifier {
     final page = currentPage;
     if (page == null) return;
 
-    page.clear();
-    page.updateCache(null);
+    if (_isProcessing) return;
+    _isProcessing = true;
 
-    await _repository.deleteAnnotationsByPage(page.documentId, page.pageNumber);
-    logger.info('Cleared page ${page.pageNumber}');
+    try {
+      page.clear();
+      page.updateCache(null);
+
+      await _repository.deleteAnnotationsByPage(
+        page.documentId,
+        page.pageNumber,
+      );
+      logger.info('Cleared page ${page.pageNumber}');
+    } finally {
+      _isProcessing = false;
+    }
   }
 
   // ===========================================================================
   // Cache Management
   // ===========================================================================
 
-  Future<void> _rebuildCache(DrawingPage page) async {
+  Future<void> _rebuildCacheAsync(DrawingPage page) async {
     final newCache = await _cacheManager.rebuildCache(page);
     page.updateCache(newCache);
   }
+
   // ===========================================================================
   // DB Operations
   // ===========================================================================

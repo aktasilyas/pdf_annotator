@@ -209,12 +209,21 @@ class DrawingPage extends ChangeNotifier {
     }
   }
 
-  /// Cache'i güncelle
+  /// Cache'i güncelle (memory-safe)
   void updateCache(ui.Image? newCache) {
-    _cachedBitmap?.dispose();
+    // Önce eski cache'i dispose et
+    final oldCache = _cachedBitmap;
+
+    // Yeni cache'i ata
     _cachedBitmap = newCache;
     _cacheInvalid = false;
-    notifyListeners(); // BU SATIR EKLENDİ!
+
+    // Sonra eski cache'i temizle (eğer farklıysa)
+    if (oldCache != null && oldCache != newCache) {
+      oldCache.dispose();
+    }
+
+    notifyListeners();
   }
 
   void invalidateCache() {
@@ -255,7 +264,14 @@ class DrawingPage extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Cache'i temizle
     _cachedBitmap?.dispose();
+    _cachedBitmap = null;
+
+    // Undo/redo stack'leri temizle
+    _undoStack.clear();
+    _redoStack.clear();
+
     super.dispose();
   }
 }
