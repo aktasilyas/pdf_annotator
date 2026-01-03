@@ -11,6 +11,8 @@ import 'package:uuid/uuid.dart';
 import 'package:pdf_annotator/core/utils/logger.dart';
 import 'package:pdf_annotator/core/utils/point_thinner.dart';
 import 'package:pdf_annotator/core/utils/stroke_smoother.dart';
+import 'package:pdf_annotator/core/utils/lru_cache.dart';
+import 'package:pdf_annotator/core/constants/app_constants.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/drawing_tool.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/point.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/stroke.dart';
@@ -51,11 +53,14 @@ final drawingControllerProvider = ChangeNotifierProvider<DrawingController>((
 class DrawingController extends ChangeNotifier {
   final AnnotationRepository _repository;
 
-  final Map<String, DrawingPage> _pages = {};
+  // LRU cache - en fazla CacheConstants.maxCachedPages sayfa tutar
+  final LRUCache<String, DrawingPage> _pages = LRUCache(
+    CacheConstants.maxCachedPages,
+  );
 
   String? _currentPageKey;
   DrawingPage? get currentPage =>
-      _currentPageKey != null ? _pages[_currentPageKey] : null;
+      _currentPageKey != null ? _pages.get(_currentPageKey!) : null;
 
   DrawingTool _selectedTool = DrawingTool.none;
   DrawingTool get selectedTool => _selectedTool;
@@ -63,10 +68,10 @@ class DrawingController extends ChangeNotifier {
   Color _selectedColor = Colors.black;
   Color get selectedColor => _selectedColor;
 
-  double _strokeWidth = 3.0;
+  double _strokeWidth = DrawingConstants.defaultPenWidth;
   double get strokeWidth => _strokeWidth;
 
-  double _highlightWidth = 20.0;
+  double _highlightWidth = DrawingConstants.defaultHighlighterWidth;
   double get highlightWidth => _highlightWidth;
 
   final _uuid = const Uuid();
@@ -85,36 +90,51 @@ class DrawingController extends ChangeNotifier {
   // Page Management
   // ===========================================================================
 
-  /// Sayfa al veya oluştur
+  /// Sayfa al veya oluştur (LRU cache ile)
   DrawingPage getOrCreatePage(
     String documentId,
     int pageNumber,
     Size size, {
-    double pixelRatio = 3.0,
+    double? pixelRatio,
   }) {
     final key = '${documentId}_$pageNumber';
+    final effectivePixelRatio =
+        pixelRatio ?? DrawingConstants.defaultPixelRatio;
 
-    if (!_pages.containsKey(key)) {
-      _pages[key] = DrawingPage(
-        pageId: key,
-        documentId: documentId,
-        pageNumber: pageNumber,
-        pageSize: size,
-        pixelRatio: pixelRatio,
-      );
-      _loadPageAnnotations(documentId, pageNumber, _pages[key]!);
-    } else {
-      _pages[key]!.updatePageSize(size, pixelRatio: pixelRatio);
+    // LRU cache'den kontrol et
+    final existingPage = _pages.get(key);
+    if (existingPage != null) {
+      existingPage.updatePageSize(size, pixelRatio: effectivePixelRatio);
+      return existingPage;
     }
 
-    return _pages[key]!;
+    // Yeni sayfa oluştur
+    final newPage = DrawingPage(
+      pageId: key,
+      documentId: documentId,
+      pageNumber: pageNumber,
+      pageSize: size,
+      pixelRatio: effectivePixelRatio,
+    );
+
+    // LRU cache'e ekle (otomatik olarak eski sayfaları temizler)
+    _pages.put(key, newPage);
+
+    // Annotations yükle
+    _loadPageAnnotations(documentId, pageNumber, newPage);
+
+    logger.debug(
+      'Created page $key (cache size: ${_pages.size}/${_pages.maxSize})',
+    );
+
+    return newPage;
   }
 
   void setCurrentPage(
     String documentId,
     int pageNumber,
     Size size, {
-    double pixelRatio = 3.0,
+    double? pixelRatio,
   }) {
     final key = '${documentId}_$pageNumber';
 
@@ -190,15 +210,23 @@ class DrawingController extends ChangeNotifier {
   }
 
   void setStrokeWidth(double width) {
-    if (_strokeWidth != width) {
-      _strokeWidth = width;
+    final clampedWidth = width.clamp(
+      DrawingConstants.minPenWidth,
+      DrawingConstants.maxPenWidth,
+    );
+    if (_strokeWidth != clampedWidth) {
+      _strokeWidth = clampedWidth;
       notifyListeners();
     }
   }
 
   void setHighlightWidth(double width) {
-    if (_highlightWidth != width) {
-      _highlightWidth = width;
+    final clampedWidth = width.clamp(
+      DrawingConstants.minHighlighterWidth,
+      DrawingConstants.maxHighlighterWidth,
+    );
+    if (_highlightWidth != clampedWidth) {
+      _highlightWidth = clampedWidth;
       notifyListeners();
     }
   }
@@ -227,9 +255,9 @@ class DrawingController extends ChangeNotifier {
         documentId: page.documentId,
         pageNumber: page.pageNumber,
         type: AnnotationType.stroke,
-        color: _selectedColor.value,
+        color: _selectedColor.value.toInt(), // Use toInt() instead of deprecated .value
         strokeWidth: _strokeWidth,
-        opacity: 1.0,
+        opacity: DrawingConstants.defaultPenOpacity,
         points: [point],
         createdAt: now,
         updatedAt: now,
@@ -242,9 +270,9 @@ class DrawingController extends ChangeNotifier {
         documentId: page.documentId,
         pageNumber: page.pageNumber,
         type: AnnotationType.highlight,
-        color: _selectedColor.value,
+        color: _selectedColor.value.toInt(), // Use toInt() instead of deprecated .value
         strokeWidth: _highlightWidth,
-        opacity: 0.4,
+        opacity: DrawingConstants.defaultHighlighterOpacity,
         points: [point],
         createdAt: now,
         updatedAt: now,
@@ -480,11 +508,21 @@ class DrawingController extends ChangeNotifier {
   // Dispose
   // ===========================================================================
 
+  /// Cache size bilgisi al
+  int get cacheSize => _pages.size;
+  int get maxCacheSize => _pages.maxSize;
+
+  /// Manual cache temizliği (gerekirse)
+  void clearCache() {
+    final currentKey = _currentPageKey;
+    _pages.clear();
+    _currentPageKey = null;
+    logger.info('Cache cleared, current page was: $currentKey');
+    notifyListeners();
+  }
+
   @override
   void dispose() {
-    for (final page in _pages.values) {
-      page.dispose();
-    }
     _pages.clear();
     super.dispose();
   }
