@@ -2,6 +2,7 @@
 ///
 /// Sayfa bazlı çizim state'i.
 /// Her sayfa kendi stroke'larını, cache'ini ve undo stack'ini tutar.
+/// High DPI desteği ile yüksek kaliteli render.
 library;
 
 import 'dart:ui' as ui;
@@ -17,6 +18,10 @@ class DrawingPage extends ChangeNotifier {
 
   ui.Size _pageSize;
   ui.Size get pageSize => _pageSize;
+
+  /// Device pixel ratio for high DPI rendering
+  double _pixelRatio;
+  double get pixelRatio => _pixelRatio;
 
   final List<Stroke> _strokes = [];
   List<Stroke> get strokes => List.unmodifiable(_strokes);
@@ -47,11 +52,24 @@ class DrawingPage extends ChangeNotifier {
     required this.documentId,
     required this.pageNumber,
     required ui.Size pageSize,
-  }) : _pageSize = pageSize;
+    double pixelRatio = 3.0, // Default 3x for high quality
+  }) : _pageSize = pageSize,
+       _pixelRatio = pixelRatio;
 
-  void updatePageSize(ui.Size newSize) {
+  void updatePageSize(ui.Size newSize, {double? pixelRatio}) {
+    bool changed = false;
+
     if (_pageSize != newSize) {
       _pageSize = newSize;
+      changed = true;
+    }
+
+    if (pixelRatio != null && _pixelRatio != pixelRatio) {
+      _pixelRatio = pixelRatio;
+      changed = true;
+    }
+
+    if (changed) {
       _cacheInvalid = true;
       notifyListeners();
     }
@@ -209,16 +227,12 @@ class DrawingPage extends ChangeNotifier {
     }
   }
 
-  /// Cache'i güncelle (memory-safe)
   void updateCache(ui.Image? newCache) {
-    // Önce eski cache'i dispose et
     final oldCache = _cachedBitmap;
-
-    // Yeni cache'i ata
     _cachedBitmap = newCache;
     _cacheInvalid = false;
 
-    // Sonra eski cache'i temizle (eğer farklıysa)
+    // Dispose old cache after setting new one
     if (oldCache != null && oldCache != newCache) {
       oldCache.dispose();
     }
@@ -264,14 +278,10 @@ class DrawingPage extends ChangeNotifier {
 
   @override
   void dispose() {
-    // Cache'i temizle
     _cachedBitmap?.dispose();
     _cachedBitmap = null;
-
-    // Undo/redo stack'leri temizle
     _undoStack.clear();
     _redoStack.clear();
-
     super.dispose();
   }
 }

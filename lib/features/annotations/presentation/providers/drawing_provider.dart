@@ -85,7 +85,13 @@ class DrawingController extends ChangeNotifier {
   // Page Management
   // ===========================================================================
 
-  DrawingPage getOrCreatePage(String documentId, int pageNumber, Size size) {
+  /// Sayfa al veya oluştur
+  DrawingPage getOrCreatePage(
+    String documentId,
+    int pageNumber,
+    Size size, {
+    double pixelRatio = 3.0,
+  }) {
     final key = '${documentId}_$pageNumber';
 
     if (!_pages.containsKey(key)) {
@@ -94,16 +100,22 @@ class DrawingController extends ChangeNotifier {
         documentId: documentId,
         pageNumber: pageNumber,
         pageSize: size,
+        pixelRatio: pixelRatio,
       );
       _loadPageAnnotations(documentId, pageNumber, _pages[key]!);
     } else {
-      _pages[key]!.updatePageSize(size);
+      _pages[key]!.updatePageSize(size, pixelRatio: pixelRatio);
     }
 
     return _pages[key]!;
   }
 
-  void setCurrentPage(String documentId, int pageNumber, Size size) {
+  void setCurrentPage(
+    String documentId,
+    int pageNumber,
+    Size size, {
+    double pixelRatio = 3.0,
+  }) {
     final key = '${documentId}_$pageNumber';
 
     if (_currentPageKey == key) {
@@ -115,7 +127,12 @@ class DrawingController extends ChangeNotifier {
     _currentPageKey = key;
     _lastPoint = null;
 
-    final page = getOrCreatePage(documentId, pageNumber, size);
+    final page = getOrCreatePage(
+      documentId,
+      pageNumber,
+      size,
+      pixelRatio: pixelRatio,
+    );
 
     if (page.needsCacheRebuild &&
         (page.strokes.isNotEmpty || page.highlights.isNotEmpty)) {
@@ -261,11 +278,12 @@ class DrawingController extends ChangeNotifier {
     }
   }
 
+  /// Çizimi bitir
+  /// Çizimi bitir - NO SMOOTHING (path builder handles it)
   Future<void> endDrawing() async {
     final page = currentPage;
     if (page == null) return;
 
-    // Çakışmayı önle
     if (_isProcessing) return;
     _isProcessing = true;
 
@@ -280,22 +298,20 @@ class DrawingController extends ChangeNotifier {
           return;
         }
 
-        final smoothed = _strokeSmoother.smoothStroke(activeStroke);
+        // NO SMOOTHING - use original points
+        // Quadratic bezier in path builder provides smooth rendering
+        page.finishStroke(activeStroke);
 
-        // Önce stroke'u bitir (listeye ekle, active'i null yap)
-        page.finishStroke(smoothed);
-
-        // Sonra cache güncelle
-        final oldCache = page.cachedBitmap;
+        // Update cache with high DPI
         final newCache = await _cacheManager.appendStroke(
           page,
-          oldCache,
-          smoothed,
+          page.cachedBitmap,
+          activeStroke,
         );
         page.updateCache(newCache);
 
-        // DB'ye kaydet (arka planda)
-        _saveStroke(smoothed);
+        // Save to DB
+        _saveStroke(activeStroke);
       }
 
       if (page.activeHighlight != null) {
@@ -306,22 +322,19 @@ class DrawingController extends ChangeNotifier {
           return;
         }
 
-        final smoothed = _strokeSmoother.smoothHighlight(activeHighlight);
+        // NO SMOOTHING
+        page.finishHighlight(activeHighlight);
 
-        // Önce highlight'ı bitir
-        page.finishHighlight(smoothed);
-
-        // Sonra cache güncelle (highlight için append kullan)
-        final oldCache = page.cachedBitmap;
+        // Rebuild cache for proper blending
         final newCache = await _cacheManager.appendHighlight(
           page,
-          oldCache,
-          smoothed,
+          page.cachedBitmap,
+          activeHighlight,
         );
         page.updateCache(newCache);
 
-        // DB'ye kaydet
-        _saveHighlight(smoothed);
+        // Save to DB
+        _saveHighlight(activeHighlight);
       }
     } finally {
       _isProcessing = false;
@@ -438,7 +451,6 @@ class DrawingController extends ChangeNotifier {
     final newCache = await _cacheManager.rebuildCache(page);
     page.updateCache(newCache);
   }
-
   // ===========================================================================
   // DB Operations
   // ===========================================================================

@@ -1,6 +1,8 @@
 /// Viewer Screen
 ///
-/// PDF görüntüleme + çizim ekranı.
+/// PDF görüntüleme + çizim + zoom/pan ekranı.
+/// Tek parmak: Çizim/Silgi
+/// İki parmak: Zoom/Pan
 library;
 
 import 'dart:io';
@@ -25,8 +27,18 @@ class ViewerScreen extends ConsumerStatefulWidget {
 
 class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   late PdfViewerController _pdfController;
+  final TransformationController _transformController =
+      TransformationController();
+
   int _currentPage = 1;
   int _totalPages = 0;
+
+  /// İki parmak zoom/pan aktif mi?
+  bool _isTwoFingerMode = false;
+
+  /// Minimum/Maximum zoom
+  static const double _minScale = 0.5;
+  static const double _maxScale = 4.0;
 
   @override
   void initState() {
@@ -40,6 +52,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   @override
   void dispose() {
     _pdfController.dispose();
+    _transformController.dispose();
     super.dispose();
   }
 
@@ -54,16 +67,19 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
           // PDF + Canvas + Navigation
           Column(
             children: [
-              Expanded(child: _buildPdfWithCanvas(controller)),
+              Expanded(child: _buildZoomableContent(controller)),
               _buildNavigationBar(),
             ],
           ),
 
-          // Floating Toolbar (sürüklenebilir)
+          // Floating Toolbar
           FloatingToolbar(
             documentId: widget.document.id,
             pageNumber: _currentPage,
           ),
+
+          // Zoom level indicator
+          if (_isTwoFingerMode) _buildZoomIndicator(),
         ],
       ),
     );
@@ -73,6 +89,12 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     return AppBar(
       title: Text(widget.document.title, overflow: TextOverflow.ellipsis),
       actions: [
+        // Zoom reset butonu
+        IconButton(
+          icon: const Icon(Icons.fit_screen),
+          tooltip: 'Sığdır',
+          onPressed: _resetZoom,
+        ),
         IconButton(
           icon: const Icon(Icons.find_in_page),
           tooltip: 'Sayfaya Git',
@@ -82,39 +104,69 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     );
   }
 
-  Widget _buildPdfWithCanvas(DrawingController controller) {
+  Widget _buildZoomableContent(DrawingController controller) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isDrawingMode = controller.selectedTool != DrawingTool.none;
 
-        return Stack(
-          children: [
-            // PDF Viewer (altta)
-            AbsorbPointer(
-              absorbing: isDrawingMode,
-              child: SfPdfViewer.file(
-                File(widget.document.filePath),
-                controller: _pdfController,
-                pageLayoutMode: PdfPageLayoutMode.single,
-                scrollDirection: PdfScrollDirection.horizontal,
-                canShowScrollHead: false,
-                canShowScrollStatus: false,
-                enableDoubleTapZooming: !isDrawingMode,
-                onDocumentLoaded: _onDocumentLoaded,
-                onPageChanged: _onPageChanged,
-              ),
-            ),
+        return InteractiveViewer(
+          transformationController: _transformController,
+          minScale: _minScale,
+          maxScale: _maxScale,
+          panEnabled: !isDrawingMode || _isTwoFingerMode,
+          scaleEnabled: true,
+          // Çizim modunda tek parmak pan'i engelle
+          onInteractionStart: (details) {
+            if (details.pointerCount >= 2) {
+              setState(() => _isTwoFingerMode = true);
+            }
+          },
+          onInteractionEnd: (details) {
+            setState(() => _isTwoFingerMode = false);
+          },
+          child: SizedBox(
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
+            child: Stack(
+              children: [
+                // PDF Viewer (altta)
+                Positioned.fill(
+                  child: AbsorbPointer(
+                    absorbing: isDrawingMode && !_isTwoFingerMode,
+                    child: SfPdfViewer.file(
+                      File(widget.document.filePath),
+                      controller: _pdfController,
+                      pageLayoutMode: PdfPageLayoutMode.single,
+                      scrollDirection: PdfScrollDirection.horizontal,
+                      canShowScrollHead: false,
+                      canShowScrollStatus: false,
+                      enableDoubleTapZooming:
+                          false, // InteractiveViewer hallediyor
+                      interactionMode: PdfInteractionMode.pan,
+                      onDocumentLoaded: _onDocumentLoaded,
+                      onPageChanged: _onPageChanged,
+                    ),
+                  ),
+                ),
 
-            // Drawing Canvas - ValueKey ile sayfa değişikliğini algıla
-            Positioned.fill(
-              child: DrawingCanvas(
-                key: ValueKey('${widget.document.id}_$_currentPage'),
-                documentId: widget.document.id,
-                pageNumber: _currentPage,
-                size: constraints.biggest,
-              ),
+                // Drawing Canvas
+                Positioned.fill(
+                  child: DrawingCanvas(
+                    key: ValueKey('${widget.document.id}_$_currentPage'),
+                    documentId: widget.document.id,
+                    pageNumber: _currentPage,
+                    size: constraints.biggest,
+                    onTwoFingerGestureStart: () {
+                      setState(() => _isTwoFingerMode = true);
+                    },
+                    onTwoFingerGestureEnd: () {
+                      setState(() => _isTwoFingerMode = false);
+                    },
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         );
       },
     );
@@ -160,6 +212,41 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     );
   }
 
+  Widget _buildZoomIndicator() {
+    final scale = _transformController.value.getMaxScaleOnAxis();
+    final percentage = (scale * 100).round();
+
+    return Positioned(
+      top: 16,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: AnimatedOpacity(
+          opacity: _isTwoFingerMode ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 200),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              '%$percentage',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _resetZoom() {
+    _transformController.value = Matrix4.identity();
+  }
+
   void _onDocumentLoaded(PdfDocumentLoadedDetails details) {
     setState(() {
       _totalPages = details.document.pages.count;
@@ -181,6 +268,9 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
         _currentPage = newPage;
       });
       _saveCurrentPage(newPage);
+
+      // Sayfa değiştiğinde zoom'u resetle
+      _resetZoom();
     }
   }
 

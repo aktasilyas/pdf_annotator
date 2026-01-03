@@ -1,7 +1,10 @@
 /// Stroke Painter
 ///
-/// Bitmap cache + aktif çizimi render eder.
-/// Listenable pattern ile efficient repaint.
+/// High DPI aware painter that renders:
+/// 1. Cached bitmap (scaled down from high res)
+/// 2. Active stroke (real-time)
+///
+/// Uses same path building as cache for visual consistency.
 library;
 
 import 'dart:ui' as ui;
@@ -17,16 +20,26 @@ class StrokePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 1. Cached bitmap varsa kullan
+    // 1. Draw cached bitmap (high res, scaled down)
     if (page.cachedBitmap != null) {
-      canvas.drawImage(
-        page.cachedBitmap!,
-        Offset.zero,
-        Paint()..filterQuality = FilterQuality.low,
+      final src = Rect.fromLTWH(
+        0,
+        0,
+        page.cachedBitmap!.width.toDouble(),
+        page.cachedBitmap!.height.toDouble(),
       );
-    } else {
-      // Cache yoksa tüm çizimleri direkt çiz
-      // (ilk yükleme veya cache rebuild sırasında)
+      final dst = Rect.fromLTWH(0, 0, size.width, size.height);
+
+      canvas.drawImageRect(
+        page.cachedBitmap!,
+        src,
+        dst,
+        Paint()
+          ..filterQuality = FilterQuality.high
+          ..isAntiAlias = true,
+      );
+    } else if (page.strokes.isNotEmpty || page.highlights.isNotEmpty) {
+      // No cache yet, draw directly
       for (final highlight in page.highlights) {
         _drawHighlight(canvas, highlight);
       }
@@ -35,13 +48,13 @@ class StrokePainter extends CustomPainter {
       }
     }
 
-    // 2. Aktif highlight (çiziliyor)
+    // 2. Draw active highlight
     final activeHighlight = page.activeHighlight;
     if (activeHighlight != null && activeHighlight.points.isNotEmpty) {
       _drawHighlight(canvas, activeHighlight);
     }
 
-    // 3. Aktif stroke (çiziliyor)
+    // 3. Draw active stroke
     final activeStroke = page.activeStroke;
     if (activeStroke != null && activeStroke.points.isNotEmpty) {
       _drawStroke(canvas, activeStroke);
@@ -59,7 +72,7 @@ class StrokePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..isAntiAlias = true;
 
-    final path = _buildPath(stroke.points);
+    final path = _buildSmoothPath(stroke.points);
     canvas.drawPath(path, paint);
   }
 
@@ -75,11 +88,12 @@ class StrokePainter extends CustomPainter {
       ..blendMode = BlendMode.multiply
       ..isAntiAlias = true;
 
-    final path = _buildPath(highlight.points);
+    final path = _buildSmoothPath(highlight.points);
     canvas.drawPath(path, paint);
   }
 
-  Path _buildPath(List points) {
+  /// Same path building as cache manager for consistency
+  Path _buildSmoothPath(List points) {
     final path = Path();
 
     if (points.isEmpty) return path;
@@ -88,7 +102,7 @@ class StrokePainter extends CustomPainter {
     path.moveTo(first.x, first.y);
 
     if (points.length == 1) {
-      path.lineTo(first.x + 0.1, first.y + 0.1);
+      path.lineTo(first.x + 0.01, first.y + 0.01);
       return path;
     }
 
@@ -98,6 +112,7 @@ class StrokePainter extends CustomPainter {
       return path;
     }
 
+    // Quadratic bezier for smooth curves
     for (int i = 1; i < points.length - 1; i++) {
       final p0 = points[i];
       final p1 = points[i + 1];

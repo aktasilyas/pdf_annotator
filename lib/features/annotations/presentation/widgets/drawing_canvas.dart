@@ -1,7 +1,8 @@
 /// Drawing Canvas Widget
 ///
-/// Listener pattern ile yüksek performanslı çizim canvas'ı.
-/// setState kullanmaz, doğrudan page'e notify eder.
+/// High DPI aware drawing canvas.
+/// Tek parmak: Çizim/Silgi
+/// İki parmak: Zoom/Pan
 library;
 
 import 'package:flutter/material.dart';
@@ -15,12 +16,16 @@ class DrawingCanvas extends ConsumerStatefulWidget {
   final String documentId;
   final int pageNumber;
   final Size size;
+  final VoidCallback? onTwoFingerGestureStart;
+  final VoidCallback? onTwoFingerGestureEnd;
 
   const DrawingCanvas({
     super.key,
     required this.documentId,
     required this.pageNumber,
     required this.size,
+    this.onTwoFingerGestureStart,
+    this.onTwoFingerGestureEnd,
   });
 
   @override
@@ -31,9 +36,15 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
   DrawingPage? _page;
   String _currentKey = '';
 
+  final Set<int> _activePointers = {};
+  bool _isTwoFingerMode = false;
+  bool _isDrawing = false;
+  double _pixelRatio = 3.0;
+
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _pixelRatio = MediaQuery.of(context).devicePixelRatio.clamp(2.0, 4.0);
     _initPage();
   }
 
@@ -41,20 +52,17 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
   void didUpdateWidget(covariant DrawingCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Sayfa veya doküman değiştiyse yeniden init
     if (oldWidget.documentId != widget.documentId ||
         oldWidget.pageNumber != widget.pageNumber) {
       _initPage();
     } else if (oldWidget.size != widget.size) {
-      // Sadece boyut değiştiyse güncelle
-      _page?.updatePageSize(widget.size);
+      _page?.updatePageSize(widget.size, pixelRatio: _pixelRatio);
     }
   }
 
   void _initPage() {
     final newKey = '${widget.documentId}_${widget.pageNumber}';
 
-    // Aynı sayfa zaten yüklüyse tekrar init yapma
     if (_currentKey == newKey && _page != null) {
       return;
     }
@@ -66,14 +74,15 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
       widget.documentId,
       widget.pageNumber,
       widget.size,
+      pixelRatio: _pixelRatio,
     );
     controller.setCurrentPage(
       widget.documentId,
       widget.pageNumber,
       widget.size,
+      pixelRatio: _pixelRatio,
     );
 
-    // Widget'ı yeniden çiz
     if (mounted) {
       setState(() {});
     }
@@ -84,20 +93,19 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
     final controller = ref.watch(drawingControllerProvider);
     final isInteractive = controller.selectedTool != DrawingTool.none;
 
-    // Page henüz yüklenmediyse boş göster
     if (_page == null) {
       return const SizedBox.shrink();
     }
 
     return RepaintBoundary(
       child: Listener(
-        behavior: isInteractive
-            ? HitTestBehavior.opaque
-            : HitTestBehavior.translucent,
-        onPointerDown: isInteractive ? _onPointerDown : null,
-        onPointerMove: isInteractive ? _onPointerMove : null,
-        onPointerUp: isInteractive ? _onPointerUp : null,
-        onPointerCancel: isInteractive ? _onPointerCancel : null,
+        behavior: _isTwoFingerMode || !isInteractive
+            ? HitTestBehavior.translucent
+            : HitTestBehavior.opaque,
+        onPointerDown: _onPointerDown,
+        onPointerMove: _onPointerMove,
+        onPointerUp: _onPointerUp,
+        onPointerCancel: _onPointerCancel,
         child: AnimatedBuilder(
           animation: _page!,
           builder: (context, _) {
@@ -115,21 +123,40 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    _activePointers.add(event.pointer);
+
+    if (_activePointers.length >= 2) {
+      _enterTwoFingerMode();
+      return;
+    }
+
     final controller = ref.read(drawingControllerProvider);
+    if (controller.selectedTool == DrawingTool.none) return;
+
     final position = event.localPosition;
 
     if (controller.selectedTool.isDrawingTool) {
       controller.startDrawing(position);
+      _isDrawing = true;
     } else if (controller.selectedTool == DrawingTool.eraser) {
       controller.eraseAt(position, 15.0);
     }
   }
 
   void _onPointerMove(PointerMoveEvent event) {
+    if (_isTwoFingerMode) return;
+
+    if (_activePointers.length >= 2) {
+      _enterTwoFingerMode();
+      return;
+    }
+
     final controller = ref.read(drawingControllerProvider);
+    if (controller.selectedTool == DrawingTool.none) return;
+
     final position = event.localPosition;
 
-    if (controller.selectedTool.isDrawingTool) {
+    if (controller.selectedTool.isDrawingTool && _isDrawing) {
       controller.updateDrawing(position);
     } else if (controller.selectedTool == DrawingTool.eraser) {
       controller.eraseAt(position, 15.0);
@@ -137,12 +164,56 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    final controller = ref.read(drawingControllerProvider);
-    controller.endDrawing();
+    _activePointers.remove(event.pointer);
+
+    if (_activePointers.isEmpty) {
+      if (_isTwoFingerMode) {
+        _exitTwoFingerMode();
+      } else if (_isDrawing) {
+        final controller = ref.read(drawingControllerProvider);
+        controller.endDrawing();
+        _isDrawing = false;
+      }
+    }
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
-    final controller = ref.read(drawingControllerProvider);
-    controller.cancelDrawing();
+    _activePointers.remove(event.pointer);
+
+    if (_activePointers.isEmpty) {
+      if (_isTwoFingerMode) {
+        _exitTwoFingerMode();
+      } else {
+        final controller = ref.read(drawingControllerProvider);
+        controller.cancelDrawing();
+        _isDrawing = false;
+      }
+    }
+  }
+
+  void _enterTwoFingerMode() {
+    if (_isTwoFingerMode) return;
+
+    if (_isDrawing) {
+      final controller = ref.read(drawingControllerProvider);
+      controller.cancelDrawing();
+      _isDrawing = false;
+    }
+
+    setState(() {
+      _isTwoFingerMode = true;
+    });
+
+    widget.onTwoFingerGestureStart?.call();
+  }
+
+  void _exitTwoFingerMode() {
+    if (!_isTwoFingerMode) return;
+
+    setState(() {
+      _isTwoFingerMode = false;
+    });
+
+    widget.onTwoFingerGestureEnd?.call();
   }
 }

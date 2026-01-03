@@ -1,7 +1,7 @@
 /// Bitmap Cache Manager
 ///
-/// Tamamlanmış çizimleri ui.Image olarak cache'ler.
-/// Memory-safe implementasyon.
+/// High DPI bitmap cache for crisp rendering.
+/// Uses device pixel ratio for sharp strokes at any zoom level.
 library;
 
 import 'dart:ui' as ui;
@@ -13,26 +13,30 @@ import 'package:pdf_annotator/features/annotations/domain/entities/drawing_page.
 class BitmapCacheManager {
   const BitmapCacheManager();
 
-  /// Tüm çizimlerden bitmap oluştur
+  /// Rebuild complete cache at high resolution
   Future<ui.Image?> rebuildCache(DrawingPage page) async {
     if (page.strokes.isEmpty && page.highlights.isEmpty) {
       return null;
     }
 
-    final width = page.pageSize.width.ceil();
-    final height = page.pageSize.height.ceil();
+    final pixelRatio = page.pixelRatio;
+    final width = (page.pageSize.width * pixelRatio).ceil();
+    final height = (page.pageSize.height * pixelRatio).ceil();
 
     if (width <= 0 || height <= 0) return null;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
-    // Highlight'ları çiz (altta)
+    // Scale up for high DPI
+    canvas.scale(pixelRatio);
+
+    // Draw highlights (below strokes)
     for (final highlight in page.highlights) {
       _drawHighlight(canvas, highlight);
     }
 
-    // Stroke'ları çiz (üstte)
+    // Draw strokes
     for (final stroke in page.strokes) {
       _drawStroke(canvas, stroke);
     }
@@ -40,72 +44,81 @@ class BitmapCacheManager {
     final picture = recorder.endRecording();
 
     try {
-      final image = await picture.toImage(width, height);
-      return image;
+      return await picture.toImage(width, height);
     } finally {
       picture.dispose();
     }
   }
 
-  /// Mevcut cache'e yeni stroke ekle
+  /// Append stroke to existing cache
   Future<ui.Image?> appendStroke(
     DrawingPage page,
     ui.Image? existingCache,
     Stroke newStroke,
   ) async {
-    final width = page.pageSize.width.ceil();
-    final height = page.pageSize.height.ceil();
+    final pixelRatio = page.pixelRatio;
+    final width = (page.pageSize.width * pixelRatio).ceil();
+    final height = (page.pageSize.height * pixelRatio).ceil();
 
     if (width <= 0 || height <= 0) return null;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
-    // Mevcut cache'i çiz
+    // Draw existing cache at full resolution
     if (existingCache != null) {
       canvas.drawImage(existingCache, Offset.zero, Paint());
     }
 
-    // Yeni stroke'u çiz
+    // Scale for new stroke
+    canvas.scale(pixelRatio);
+
+    // Draw new stroke
     _drawStroke(canvas, newStroke);
 
     final picture = recorder.endRecording();
 
     try {
-      final image = await picture.toImage(width, height);
-      return image;
+      return await picture.toImage(width, height);
     } finally {
       picture.dispose();
     }
   }
 
-  /// Mevcut cache'e yeni highlight ekle
+  /// Append highlight to existing cache
   Future<ui.Image?> appendHighlight(
     DrawingPage page,
     ui.Image? existingCache,
     Highlight newHighlight,
   ) async {
-    final width = page.pageSize.width.ceil();
-    final height = page.pageSize.height.ceil();
+    // For highlights with blend mode, rebuild entire cache
+    // This ensures proper blending
+    final pixelRatio = page.pixelRatio;
+    final width = (page.pageSize.width * pixelRatio).ceil();
+    final height = (page.pageSize.height * pixelRatio).ceil();
 
     if (width <= 0 || height <= 0) return null;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
-    // Mevcut cache'i çiz
-    if (existingCache != null) {
-      canvas.drawImage(existingCache, Offset.zero, Paint());
+    // Scale for drawing
+    canvas.scale(pixelRatio);
+
+    // Redraw all highlights
+    for (final highlight in page.highlights) {
+      _drawHighlight(canvas, highlight);
     }
 
-    // Yeni highlight'ı çiz
-    _drawHighlight(canvas, newHighlight);
+    // Redraw all strokes on top
+    for (final stroke in page.strokes) {
+      _drawStroke(canvas, stroke);
+    }
 
     final picture = recorder.endRecording();
 
     try {
-      final image = await picture.toImage(width, height);
-      return image;
+      return await picture.toImage(width, height);
     } finally {
       picture.dispose();
     }
@@ -122,7 +135,7 @@ class BitmapCacheManager {
       ..style = PaintingStyle.stroke
       ..isAntiAlias = true;
 
-    final path = _buildPath(stroke.points);
+    final path = _buildSmoothPath(stroke.points);
     canvas.drawPath(path, paint);
   }
 
@@ -138,11 +151,12 @@ class BitmapCacheManager {
       ..blendMode = BlendMode.multiply
       ..isAntiAlias = true;
 
-    final path = _buildPath(highlight.points);
+    final path = _buildSmoothPath(highlight.points);
     canvas.drawPath(path, paint);
   }
 
-  Path _buildPath(List points) {
+  /// Build smooth path using quadratic bezier curves
+  Path _buildSmoothPath(List points) {
     final path = Path();
 
     if (points.isEmpty) return path;
@@ -151,7 +165,8 @@ class BitmapCacheManager {
     path.moveTo(first.x, first.y);
 
     if (points.length == 1) {
-      path.lineTo(first.x + 0.1, first.y + 0.1);
+      // Single point - draw tiny line for visibility
+      path.lineTo(first.x + 0.01, first.y + 0.01);
       return path;
     }
 
@@ -161,7 +176,7 @@ class BitmapCacheManager {
       return path;
     }
 
-    // Quadratic Bezier ile yumuşat
+    // Use quadratic bezier for smooth curves
     for (int i = 1; i < points.length - 1; i++) {
       final p0 = points[i];
       final p1 = points[i + 1];
@@ -170,6 +185,7 @@ class BitmapCacheManager {
       path.quadraticBezierTo(p0.x, p0.y, midX, midY);
     }
 
+    // Connect to last point
     final last = points.last;
     path.lineTo(last.x, last.y);
 
