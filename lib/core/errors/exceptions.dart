@@ -34,8 +34,8 @@ abstract class AppException implements Exception {
 /// Database exception
 ///
 /// SQLite işlemlerinde oluşan hatalar için
-class DatabaseException extends AppException {
-  const DatabaseException({
+class AppDatabaseException extends AppException {
+  const AppDatabaseException({
     required super.message,
     super.originalError,
     super.stackTrace,
@@ -45,11 +45,11 @@ class DatabaseException extends AppException {
 /// File system exception
 ///
 /// Dosya okuma/yazma/silme işlemlerinde oluşan hatalar için
-class FileSystemException extends AppException {
+class AppFileSystemException extends AppException {
   /// Hatalı dosya yolu
   final String? path;
 
-  const FileSystemException({
+  const AppFileSystemException({
     required super.message,
     this.path,
     super.originalError,

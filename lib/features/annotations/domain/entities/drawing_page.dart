@@ -3,6 +3,7 @@
 /// Sayfa bazlı çizim state'i.
 /// Her sayfa kendi stroke'larını, cache'ini ve undo stack'ini tutar.
 /// High DPI desteği ile yüksek kaliteli render.
+/// Differential undo/redo sistemi ile düşük memory footprint.
 library;
 
 import 'dart:ui' as ui;
@@ -10,8 +11,10 @@ import 'package:flutter/foundation.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/point.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/stroke.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/highlight.dart';
+import 'package:pdf_annotator/features/annotations/domain/entities/undo_operation.dart';
+import 'package:pdf_annotator/core/constants/app_constants.dart';
 
-class DrawingPage extends ChangeNotifier {
+class DrawingPage extends ChangeNotifier implements UndoablePageState {
   final String pageId;
   final String documentId;
   final int pageNumber;
@@ -41,8 +44,9 @@ class DrawingPage extends ChangeNotifier {
   bool _cacheInvalid = true;
   bool get needsCacheRebuild => _cacheInvalid;
 
-  final List<_PageState> _undoStack = [];
-  final List<_PageState> _redoStack = [];
+  // Differential undo/redo - sadece operasyonları tutar, full state değil
+  final List<UndoOperation> _undoStack = [];
+  final List<UndoOperation> _redoStack = [];
 
   bool get canUndo => _undoStack.isNotEmpty;
   bool get canRedo => _redoStack.isNotEmpty;
@@ -52,9 +56,12 @@ class DrawingPage extends ChangeNotifier {
     required this.documentId,
     required this.pageNumber,
     required ui.Size pageSize,
-    double pixelRatio = 3.0, // Default 3x for high quality
-  }) : _pageSize = pageSize,
-       _pixelRatio = pixelRatio;
+    double pixelRatio = 2.0, // Use constant
+  })  : _pageSize = pageSize,
+        _pixelRatio = pixelRatio.clamp(
+          DrawingConstants.minPixelRatio,
+          DrawingConstants.maxPixelRatio,
+        );
 
   void updatePageSize(ui.Size newSize, {double? pixelRatio}) {
     bool changed = false;
@@ -107,13 +114,15 @@ class DrawingPage extends ChangeNotifier {
   }
 
   void finishStroke(Stroke finalStroke) {
-    if (finalStroke.isEmpty || finalStroke.points.length < 2) {
+    if (finalStroke.isEmpty ||
+        finalStroke.points.length < DrawingConstants.minStrokePoints) {
       _activeStroke = null;
       notifyListeners();
       return;
     }
 
-    _pushUndo();
+    // Differential undo - sadece ekleme operasyonunu kaydet
+    _pushUndoOperation(AddStrokeOperation(finalStroke));
     _strokes.add(finalStroke);
     _activeStroke = null;
     _cacheInvalid = true;
@@ -122,13 +131,15 @@ class DrawingPage extends ChangeNotifier {
   }
 
   void finishHighlight(Highlight finalHighlight) {
-    if (finalHighlight.isEmpty || finalHighlight.points.length < 2) {
+    if (finalHighlight.isEmpty ||
+        finalHighlight.points.length < DrawingConstants.minStrokePoints) {
       _activeHighlight = null;
       notifyListeners();
       return;
     }
 
-    _pushUndo();
+    // Differential undo - sadece ekleme operasyonunu kaydet
+    _pushUndoOperation(AddHighlightOperation(finalHighlight));
     _highlights.add(finalHighlight);
     _activeHighlight = null;
     _cacheInvalid = true;
@@ -147,7 +158,9 @@ class DrawingPage extends ChangeNotifier {
   void removeStroke(String strokeId) {
     final index = _strokes.indexWhere((s) => s.id == strokeId);
     if (index != -1) {
-      _pushUndo();
+      final stroke = _strokes[index];
+      // Differential undo - silinen stroke'u ve pozisyonunu kaydet
+      _pushUndoOperation(RemoveStrokeOperation(stroke, index));
       _strokes.removeAt(index);
       _cacheInvalid = true;
       _redoStack.clear();
@@ -158,7 +171,9 @@ class DrawingPage extends ChangeNotifier {
   void removeHighlight(String highlightId) {
     final index = _highlights.indexWhere((h) => h.id == highlightId);
     if (index != -1) {
-      _pushUndo();
+      final highlight = _highlights[index];
+      // Differential undo - silinen highlight'ı ve pozisyonunu kaydet
+      _pushUndoOperation(RemoveHighlightOperation(highlight, index));
       _highlights.removeAt(index);
       _cacheInvalid = true;
       _redoStack.clear();
@@ -169,7 +184,10 @@ class DrawingPage extends ChangeNotifier {
   void clear() {
     if (_strokes.isEmpty && _highlights.isEmpty) return;
 
-    _pushUndo();
+    // Differential undo - tüm annotations'ı kaydet
+    _pushUndoOperation(
+      ClearAllOperation(List.from(_strokes), List.from(_highlights)),
+    );
     _strokes.clear();
     _highlights.clear();
     _cacheInvalid = true;
@@ -180,18 +198,14 @@ class DrawingPage extends ChangeNotifier {
   void undo() {
     if (!canUndo) return;
 
-    _redoStack.add(
-      _PageState(
-        strokes: List.from(_strokes),
-        highlights: List.from(_highlights),
-      ),
-    );
+    final operation = _undoStack.removeLast();
+    operation.undo(this);
 
-    final previous = _undoStack.removeLast();
-    _strokes.clear();
-    _strokes.addAll(previous.strokes);
-    _highlights.clear();
-    _highlights.addAll(previous.highlights);
+    _redoStack.add(operation);
+    if (_redoStack.length > DrawingConstants.maxRedoStackSize) {
+      _redoStack.removeAt(0);
+    }
+
     _cacheInvalid = true;
     notifyListeners();
   }
@@ -199,32 +213,72 @@ class DrawingPage extends ChangeNotifier {
   void redo() {
     if (!canRedo) return;
 
-    _undoStack.add(
-      _PageState(
-        strokes: List.from(_strokes),
-        highlights: List.from(_highlights),
-      ),
-    );
+    final operation = _redoStack.removeLast();
+    operation.redo(this);
 
-    final next = _redoStack.removeLast();
-    _strokes.clear();
-    _strokes.addAll(next.strokes);
-    _highlights.clear();
-    _highlights.addAll(next.highlights);
+    _undoStack.add(operation);
+    if (_undoStack.length > DrawingConstants.maxUndoStackSize) {
+      _undoStack.removeAt(0);
+    }
+
     _cacheInvalid = true;
     notifyListeners();
   }
 
-  void _pushUndo() {
-    _undoStack.add(
-      _PageState(
-        strokes: List.from(_strokes),
-        highlights: List.from(_highlights),
-      ),
-    );
-    if (_undoStack.length > 30) {
+  void _pushUndoOperation(UndoOperation operation) {
+    _undoStack.add(operation);
+    if (_undoStack.length > DrawingConstants.maxUndoStackSize) {
       _undoStack.removeAt(0);
     }
+  }
+
+  // UndoablePageState implementation
+  @override
+  void addStroke(Stroke stroke) {
+    _strokes.add(stroke);
+  }
+
+  @override
+  void removeStrokeById(String id) {
+    _strokes.removeWhere((s) => s.id == id);
+  }
+
+  @override
+  void insertStrokeAt(int index, Stroke stroke) {
+    _strokes.insert(index, stroke);
+  }
+
+  @override
+  void restoreStrokes(List<Stroke> strokes) {
+    _strokes.clear();
+    _strokes.addAll(strokes);
+  }
+
+  @override
+  void addHighlight(Highlight highlight) {
+    _highlights.add(highlight);
+  }
+
+  @override
+  void removeHighlightById(String id) {
+    _highlights.removeWhere((h) => h.id == id);
+  }
+
+  @override
+  void insertHighlightAt(int index, Highlight highlight) {
+    _highlights.insert(index, highlight);
+  }
+
+  @override
+  void restoreHighlights(List<Highlight> highlights) {
+    _highlights.clear();
+    _highlights.addAll(highlights);
+  }
+
+  @override
+  void clearAll() {
+    _strokes.clear();
+    _highlights.clear();
   }
 
   void updateCache(ui.Image? newCache) {
@@ -284,11 +338,4 @@ class DrawingPage extends ChangeNotifier {
     _redoStack.clear();
     super.dispose();
   }
-}
-
-class _PageState {
-  final List<Stroke> strokes;
-  final List<Highlight> highlights;
-
-  const _PageState({required this.strokes, required this.highlights});
 }

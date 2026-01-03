@@ -10,7 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/drawing_tool.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/drawing_page.dart';
 import 'package:pdf_annotator/features/annotations/presentation/providers/drawing_provider.dart';
-import 'package:pdf_annotator/features/annotations/presentation/painters/stroke_painter.dart';
+import 'package:pdf_annotator/features/annotations/presentation/painters/optimized_stroke_painter.dart';
+import 'package:pdf_annotator/core/constants/app_constants.dart';
 
 class DrawingCanvas extends ConsumerStatefulWidget {
   final String documentId;
@@ -39,12 +40,15 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
   final Set<int> _activePointers = {};
   bool _isTwoFingerMode = false;
   bool _isDrawing = false;
-  double _pixelRatio = 3.0;
+  double _pixelRatio = DrawingConstants.defaultPixelRatio;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _pixelRatio = MediaQuery.of(context).devicePixelRatio.clamp(2.0, 4.0);
+    _pixelRatio = MediaQuery.of(context).devicePixelRatio.clamp(
+          DrawingConstants.minPixelRatio,
+          DrawingConstants.maxPixelRatio,
+        );
     _initPage();
   }
 
@@ -114,7 +118,7 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
               isComplex: true,
               willChange:
                   _page!.activeStroke != null || _page!.activeHighlight != null,
-              painter: StrokePainter(page: _page!),
+              painter: OptimizedStrokePainter(page: _page!),
             );
           },
         ),
@@ -139,7 +143,7 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
       controller.startDrawing(position);
       _isDrawing = true;
     } else if (controller.selectedTool == DrawingTool.eraser) {
-      controller.eraseAt(position, 15.0);
+      controller.eraseAt(position, DrawingConstants.eraserTolerance);
     }
   }
 
@@ -159,7 +163,7 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
     if (controller.selectedTool.isDrawingTool && _isDrawing) {
       controller.updateDrawing(position);
     } else if (controller.selectedTool == DrawingTool.eraser) {
-      controller.eraseAt(position, 15.0);
+      controller.eraseAt(position, DrawingConstants.eraserTolerance);
     }
   }
 

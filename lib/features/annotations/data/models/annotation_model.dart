@@ -5,11 +5,12 @@
 /// Points listesi JSON string olarak saklanır.
 library;
 
-import 'dart:convert';
 import 'package:pdf_annotator/features/annotations/data/models/point_model.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/annotation_type.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/stroke.dart';
 import 'package:pdf_annotator/features/annotations/domain/entities/highlight.dart';
+import 'package:pdf_annotator/core/utils/json_parser.dart';
+import 'package:pdf_annotator/core/errors/exceptions.dart';
 
 class AnnotationModel {
   /// Unique identifier
@@ -64,33 +65,83 @@ class AnnotationModel {
   });
 
   /// Database Map'ten AnnotationModel oluşturur
+  ///
+  /// Throws: [ValidationException] JSON parsing veya validation hatası varsa
   factory AnnotationModel.fromMap(Map<String, dynamic> map) {
-    // Points JSON string olarak saklanıyor
-    final pointsJson = map['points'] as String;
-    final pointsList = (jsonDecode(pointsJson) as List)
-        .map((p) => PointModel.fromMap(p as Map<String, dynamic>))
+    // Safe JSON parsing with validation
+    final pointsJson = JsonParser.getRequiredField<String>(
+      map,
+      'points',
+      fieldName: 'Points JSON',
+    );
+
+    // Decode and validate points list
+    final pointsListRaw = JsonParser.decodeList(pointsJson);
+    final pointsList = pointsListRaw
+        .map((p) => PointModel.fromMap(p))
         .toList();
 
+    // Validate minimum points
+    if (pointsList.isEmpty) {
+      throw const ValidationException(
+        message: 'Annotation en az 1 nokta içermelidir',
+        field: 'points',
+      );
+    }
+
     return AnnotationModel(
-      id: map['id'] as String,
-      documentId: map['document_id'] as String,
-      pageNumber: map['page_number'] as int,
-      type: AnnotationTypeExtension.fromDbString(map['type'] as String),
-      color: map['color'] as int,
-      strokeWidth: (map['stroke_width'] as num).toDouble(),
-      opacity: (map['opacity'] as num).toDouble(),
+      id: JsonParser.getRequiredField<String>(map, 'id'),
+      documentId: JsonParser.getRequiredField<String>(
+        map,
+        'document_id',
+        fieldName: 'Document ID',
+      ),
+      pageNumber: JsonParser.getRequiredField<int>(
+        map,
+        'page_number',
+        fieldName: 'Page Number',
+      ),
+      type: JsonParser.getEnumField<AnnotationType>(
+        map,
+        'type',
+        AnnotationTypeExtension.fromDbString,
+        fieldName: 'Annotation Type',
+      ),
+      color: JsonParser.getRequiredField<int>(map, 'color'),
+      strokeWidth: JsonParser.getNumericField(
+        map,
+        'stroke_width',
+        fieldName: 'Stroke Width',
+      ),
+      opacity: JsonParser.getNumericField(map, 'opacity'),
       points: pointsList,
-      createdAt: DateTime.parse(map['created_at'] as String),
-      updatedAt: DateTime.parse(map['updated_at'] as String),
-      isDeleted: (map['is_deleted'] as int) == 1,
-      zIndex: map['z_index'] as int? ?? 0,
+      createdAt: JsonParser.getDateTimeField(
+        map,
+        'created_at',
+        fieldName: 'Created At',
+      ),
+      updatedAt: JsonParser.getDateTimeField(
+        map,
+        'updated_at',
+        fieldName: 'Updated At',
+      ),
+      isDeleted: JsonParser.getBooleanField(
+        map,
+        'is_deleted',
+        fieldName: 'Is Deleted',
+      ),
+      zIndex: JsonParser.getOptionalField<int>(map, 'z_index') ?? 0,
     );
   }
 
   /// AnnotationModel'i Database Map'e çevirir
+  ///
+  /// Throws: [ValidationException] JSON encoding hatası varsa
   Map<String, dynamic> toMap() {
-    // Points'i JSON string'e çevir
-    final pointsJson = jsonEncode(points.map((p) => p.toMap()).toList());
+    // Safe JSON encoding
+    final pointsJson = JsonParser.safeEncode(
+      points.map((p) => p.toMap()).toList(),
+    );
 
     return {
       'id': id,
