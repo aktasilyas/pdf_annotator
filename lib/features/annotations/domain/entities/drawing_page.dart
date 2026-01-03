@@ -56,7 +56,7 @@ class DrawingPage extends ChangeNotifier implements UndoablePageState {
     required this.documentId,
     required this.pageNumber,
     required ui.Size pageSize,
-    double pixelRatio = 2.0, // Use constant
+    double pixelRatio = 2.0, // Optimized default (balance between quality and performance)
   })  : _pageSize = pageSize,
         _pixelRatio = pixelRatio.clamp(
           DrawingConstants.minPixelRatio,
@@ -113,11 +113,11 @@ class DrawingPage extends ChangeNotifier implements UndoablePageState {
     notifyListeners();
   }
 
-  void finishStroke(Stroke finalStroke) {
+  void finishStroke(Stroke finalStroke, {bool notify = true}) {
     if (finalStroke.isEmpty ||
         finalStroke.points.length < DrawingConstants.minStrokePoints) {
       _activeStroke = null;
-      notifyListeners();
+      if (notify) notifyListeners();
       return;
     }
 
@@ -127,14 +127,14 @@ class DrawingPage extends ChangeNotifier implements UndoablePageState {
     _activeStroke = null;
     _cacheInvalid = true;
     _redoStack.clear();
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
-  void finishHighlight(Highlight finalHighlight) {
+  void finishHighlight(Highlight finalHighlight, {bool notify = true}) {
     if (finalHighlight.isEmpty ||
         finalHighlight.points.length < DrawingConstants.minStrokePoints) {
       _activeHighlight = null;
-      notifyListeners();
+      if (notify) notifyListeners();
       return;
     }
 
@@ -144,7 +144,7 @@ class DrawingPage extends ChangeNotifier implements UndoablePageState {
     _activeHighlight = null;
     _cacheInvalid = true;
     _redoStack.clear();
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   void cancelDrawing() {

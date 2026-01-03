@@ -45,6 +45,9 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Optimize pixel ratio for better performance and memory usage
+    // Lower values = faster cache generation, less memory
+    // Higher values = better quality at high zoom
     _pixelRatio = MediaQuery.of(context).devicePixelRatio.clamp(
           DrawingConstants.minPixelRatio,
           DrawingConstants.maxPixelRatio,

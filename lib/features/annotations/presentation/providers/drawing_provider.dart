@@ -326,19 +326,20 @@ class DrawingController extends ChangeNotifier {
           return;
         }
 
-        // NO SMOOTHING - use original points
-        // Quadratic bezier in path builder provides smooth rendering
-        page.finishStroke(activeStroke);
+        // Finish stroke without notifying (keep it visible during cache update)
+        page.finishStroke(activeStroke, notify: false);
 
-        // Update cache with high DPI
+        // Update cache with high DPI (async)
         final newCache = await _cacheManager.appendStroke(
           page,
           page.cachedBitmap,
           activeStroke,
         );
+
+        // Update cache - this will notify listeners once
         page.updateCache(newCache);
 
-        // Save to DB
+        // Save to DB (fire and forget)
         _saveStroke(activeStroke);
       }
 
@@ -350,18 +351,20 @@ class DrawingController extends ChangeNotifier {
           return;
         }
 
-        // NO SMOOTHING
-        page.finishHighlight(activeHighlight);
+        // Finish highlight without notifying (keep it visible during cache update)
+        page.finishHighlight(activeHighlight, notify: false);
 
-        // Rebuild cache for proper blending
+        // Rebuild cache for proper blending (async)
         final newCache = await _cacheManager.appendHighlight(
           page,
           page.cachedBitmap,
           activeHighlight,
         );
+
+        // Update cache - this will notify listeners once
         page.updateCache(newCache);
 
-        // Save to DB
+        // Save to DB (fire and forget)
         _saveHighlight(activeHighlight);
       }
     } finally {

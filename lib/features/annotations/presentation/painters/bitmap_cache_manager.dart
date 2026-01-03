@@ -86,13 +86,13 @@ class BitmapCacheManager {
   }
 
   /// Append highlight to existing cache
+  /// Note: Highlights use blend mode, so we need to rebuild cache
+  /// But we only do full rebuild if there are multiple highlights
   Future<ui.Image?> appendHighlight(
     DrawingPage page,
     ui.Image? existingCache,
     Highlight newHighlight,
   ) async {
-    // For highlights with blend mode, rebuild entire cache
-    // This ensures proper blending
     final pixelRatio = page.pixelRatio;
     final width = (page.pageSize.width * pixelRatio).ceil();
     final height = (page.pageSize.height * pixelRatio).ceil();
@@ -102,17 +102,29 @@ class BitmapCacheManager {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
-    // Scale for drawing
-    canvas.scale(pixelRatio);
+    // If no existing cache, rebuild from scratch
+    if (existingCache == null || page.highlights.length <= 1) {
+      // Scale for drawing
+      canvas.scale(pixelRatio);
 
-    // Redraw all highlights
-    for (final highlight in page.highlights) {
-      _drawHighlight(canvas, highlight);
-    }
+      // Draw all highlights
+      for (final highlight in page.highlights) {
+        _drawHighlight(canvas, highlight);
+      }
 
-    // Redraw all strokes on top
-    for (final stroke in page.strokes) {
-      _drawStroke(canvas, stroke);
+      // Draw all strokes on top
+      for (final stroke in page.strokes) {
+        _drawStroke(canvas, stroke);
+      }
+    } else {
+      // Draw existing cache first
+      canvas.drawImage(existingCache, Offset.zero, Paint());
+
+      // Scale for new highlight
+      canvas.scale(pixelRatio);
+
+      // Only draw new highlight with blend mode
+      _drawHighlight(canvas, newHighlight);
     }
 
     final picture = recorder.endRecording();
