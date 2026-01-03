@@ -136,13 +136,17 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
                     child: SfPdfViewer.file(
                       File(widget.document.filePath),
                       controller: _pdfController,
-                      pageLayoutMode: PdfPageLayoutMode.single,
+                      // Performance optimizations
+                      pageLayoutMode: PdfPageLayoutMode.single, // Single page mode for faster navigation
                       scrollDirection: PdfScrollDirection.horizontal,
                       canShowScrollHead: false,
                       canShowScrollStatus: false,
-                      enableDoubleTapZooming:
-                          false, // InteractiveViewer hallediyor
+                      canShowPaginationDialog: false, // Disable pagination dialog
+                      enableDoubleTapZooming: false, // InteractiveViewer hallediyor
+                      enableDocumentLinkAnnotation: false, // Disable link parsing for faster load
+                      enableTextSelection: false, // Disable text selection for faster rendering
                       interactionMode: PdfInteractionMode.pan,
+                      maxZoomLevel: _maxScale, // Limit max zoom
                       onDocumentLoaded: _onDocumentLoaded,
                       onPageChanged: _onPageChanged,
                     ),
@@ -269,8 +273,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
       });
       _saveCurrentPage(newPage);
 
-      // Sayfa değiştiğinde zoom'u resetle
-      _resetZoom();
+      // Not resetting zoom on page change for better UX
+      // User can manually reset with the fit button
+      // Uncomment below to auto-reset zoom:
+      // _resetZoom();
     }
   }
 

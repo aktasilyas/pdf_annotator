@@ -52,7 +52,7 @@ class DrawingPage extends ChangeNotifier {
     required this.documentId,
     required this.pageNumber,
     required ui.Size pageSize,
-    double pixelRatio = 3.0, // Default 3x for high quality
+    double pixelRatio = 2.0, // Optimized default (balance between quality and performance)
   }) : _pageSize = pageSize,
        _pixelRatio = pixelRatio;
 
@@ -106,10 +106,10 @@ class DrawingPage extends ChangeNotifier {
     notifyListeners();
   }
 
-  void finishStroke(Stroke finalStroke) {
+  void finishStroke(Stroke finalStroke, {bool notify = true}) {
     if (finalStroke.isEmpty || finalStroke.points.length < 2) {
       _activeStroke = null;
-      notifyListeners();
+      if (notify) notifyListeners();
       return;
     }
 
@@ -118,13 +118,13 @@ class DrawingPage extends ChangeNotifier {
     _activeStroke = null;
     _cacheInvalid = true;
     _redoStack.clear();
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
-  void finishHighlight(Highlight finalHighlight) {
+  void finishHighlight(Highlight finalHighlight, {bool notify = true}) {
     if (finalHighlight.isEmpty || finalHighlight.points.length < 2) {
       _activeHighlight = null;
-      notifyListeners();
+      if (notify) notifyListeners();
       return;
     }
 
@@ -133,7 +133,7 @@ class DrawingPage extends ChangeNotifier {
     _activeHighlight = null;
     _cacheInvalid = true;
     _redoStack.clear();
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   void cancelDrawing() {

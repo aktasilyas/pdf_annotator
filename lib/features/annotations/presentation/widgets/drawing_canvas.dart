@@ -39,12 +39,15 @@ class _DrawingCanvasState extends ConsumerState<DrawingCanvas> {
   final Set<int> _activePointers = {};
   bool _isTwoFingerMode = false;
   bool _isDrawing = false;
-  double _pixelRatio = 3.0;
+  double _pixelRatio = 2.0;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _pixelRatio = MediaQuery.of(context).devicePixelRatio.clamp(2.0, 4.0);
+    // Optimize pixel ratio for better performance and memory usage
+    // Lower values = faster cache generation, less memory
+    // Higher values = better quality at high zoom
+    _pixelRatio = MediaQuery.of(context).devicePixelRatio.clamp(1.5, 2.5);
     _initPage();
   }
 
